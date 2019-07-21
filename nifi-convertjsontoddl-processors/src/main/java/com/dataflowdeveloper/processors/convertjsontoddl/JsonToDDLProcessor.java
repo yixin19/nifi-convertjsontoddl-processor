@@ -66,8 +66,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class JsonToDDLProcessor extends AbstractProcessor {
 
     private static final String FILENAME = "filename";
-    public static final int PADDING_FACTOR = 12;
-    private static final String TXT_CREATE_TABLE = "CREATE TABLE ";
+    public static final int PADDING_FACTOR = 50;
+    private static final String TXT_CREATE_TABLE = "CREATE TABLE IF NOT EXISTS ";
     public static final String FIELD_TABLE_TYPE = "TABLE_TYPE";
     public static final String FIELD_TABLE_NAME = "TABLE_NAME";
     public static final String FIELD_PRIMARY_KEY = "PRIMARY_KEY";
@@ -96,7 +96,7 @@ public class JsonToDDLProcessor extends AbstractProcessor {
 
     public static final PropertyDescriptor PRIMARY_KEY = new PropertyDescriptor.Builder().name(FIELD_PRIMARY_KEY)
             .displayName("primaryKey").description("A comma-seperated list of field names that identifies the Primary Key")
-            .addValidator(StandardValidators.ATTRIBUTE_KEY_VALIDATOR).build();
+            .addValidator(StandardValidators.ATTRIBUTE_KEY_VALIDATOR).expressionLanguageSupported(true).build();
 
     public static final Relationship REL_SUCCESS = new Relationship.Builder().name(FIELD_SUCCESS)
             .description("Successfully extract content.").build();
@@ -167,16 +167,14 @@ public class JsonToDDLProcessor extends AbstractProcessor {
      */
     public static String cleanName(String dirtyName) {
         String cleanName = "";
-
         try {
-            cleanName = dirtyName.replaceFirst("[^A-Za-z]", "");
+            cleanName = dirtyName.replaceFirst("[^A-Za-z_]", "");
             cleanName = cleanName.replaceAll("[^A-Za-z0-9_]", "");
             cleanName = cleanName.replaceAll("\\:", "");
             cleanName = cleanName.replaceAll("\\.", "");
         } catch (Throwable t) {
 
         }
-
         return cleanName;
     }
 
@@ -214,15 +212,26 @@ public class JsonToDDLProcessor extends AbstractProcessor {
             while (fieldsIterator.hasNext()) {
                 Map.Entry<String, JsonNode> field = fieldsIterator.next();
 
-                sql.append(cleanName(field.getKey()));
-
+//                sql.append(cleanName(field.getKey()));
+                sql.append(field.getKey());
                 if (field.getValue() != null) {
 
-                    if (field.getValue().canConvertToInt()) {
-                        sql.append(" INT, ");
-                    } else if (field.getValue().canConvertToLong()) {
-                        sql.append(" LONG, ");
-                    } else if (field.getValue().asText().length() <= 1) {
+                    if (field.getValue().isInt()) {
+                        if (tableType.equals("Phoenix"))
+                            sql.append((" INTEGER, "));
+                        else
+                            sql.append(" INT, ");
+                    } else if (field.getValue().isLong() || field.getValue().isBigInteger()) {
+                        if (tableType.equals("Phoenix"))
+                            sql.append(" BIGINT, ");
+                        else
+                            sql.append(" LONG, ");
+                    } else if (field.getValue().isFloat()) {
+                        sql.append(" FLOAT, ");
+                    } else if (field.getValue().isDouble()) {
+                        sql.append(" DOUBLE, ");
+                    }
+                    else if (field.getValue().asText().length() <= 1) {
                         sql.append(" CHAR(1), ");
                     } else if (field.getValue().asText().equalsIgnoreCase("true") || field.getValue().asText().equalsIgnoreCase("false")) {
                         sql.append(" BOOLEAN, ");
@@ -269,7 +278,18 @@ public class JsonToDDLProcessor extends AbstractProcessor {
             sql.deleteCharAt(sql.length() - 2);
             sql.append(") ");
         }
-        return sql.toString();
+        String sqlString = sql.toString();
+
+        //for phoenix
+        //set primary key not null
+        if (tableType.equals("Phoenix")) {
+            String[] keys = primaryKey.split(",");
+            for (String k : keys) {
+                sqlString = sqlString.replaceFirst("(?i)" + k + "([^,])*", "$0 " + "NOT NULL");
+            }
+        }
+
+        return sqlString;
     }
 
     @Override
@@ -314,7 +334,7 @@ public class JsonToDDLProcessor extends AbstractProcessor {
         final String tableType = context.getProperty(FIELD_TABLE_TYPE).evaluateAttributeExpressions(flowFile).getValue();
         final String filename = flowFile.getAttribute(FILENAME);
         final String tableName = context.getProperty(FIELD_TABLE_NAME).evaluateAttributeExpressions(flowFile).getValue();
-        final String primaryKey = context.getProperty(FIELD_PRIMARY_KEY).getValue();
+        final String primaryKey = context.getProperty(FIELD_PRIMARY_KEY).evaluateAttributeExpressions(flowFile).getValue();
         String selectedTableName = ((tableName != null) ? tableName.trim() : filename);
 
         final HashMap<String, String> attributes = new HashMap<String, String>();
